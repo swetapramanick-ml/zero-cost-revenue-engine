@@ -60,6 +60,15 @@ document.addEventListener("DOMContentLoaded", () => {
     // Toast Container
     const toastContainer = document.getElementById("toast-container");
 
+    const API_BASE = (window.location.hostname === "127.0.0.1" && window.location.port === "5500") ? "http://127.0.0.1:8000" : "";
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = (resource, options) => {
+        if (typeof resource === "string" && resource.startsWith("/api/")) {
+            resource = `${API_BASE}${resource}`;
+        }
+        return originalFetch(resource, options);
+    };
+
     // --- Core Navigation ---
     btnNavDashboard.addEventListener("click", (e) => {
         e.preventDefault();
