@@ -1,56 +1,24 @@
 import os
 import json
-import logging
-from typing import Dict, Any, Optional
-
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Body
 from fastapi.responses import FileResponse
-from fastapi.middleware.cors import CORSMiddleware
-
-try:
-    from fastapi.staticfiles import StaticFiles
-except Exception:
-    # Fallback to starlette's StaticFiles if fastapi's wrapper isn't available in the environment
-    from starlette.staticfiles import StaticFiles
-
-from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from typing import Dict, Any, Optional
 
 import db
 from extractor import extract_domain_metadata
 from personalizer import generate_personalized_content
 from dispatcher import send_email
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 # Initialize DB on start
-try:
-    db.init_db()
-except Exception as e:
-    logger.error(f"Failed to initialize database: {str(e)}")
-    raise
+db.init_db()
 
 app = FastAPI(title="Zero-Cost Revenue Engine", description="Sales Outreach Automation Pipeline")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:5500",
-        "http://localhost:5500",
-        "http://127.0.0.1:8000",
-        "http://localhost:8000",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Mount static files directory
 static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-if os.path.exists(static_dir):
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
-else:
-    logger.warning(f"Static directory not found at {static_dir}")
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # HTML Template Path
 templates_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
@@ -72,76 +40,61 @@ def run_pipeline_for_lead(lead_id: int):
     Automated background worker running:
     [1. Data Extraction] --> [2. State DB] --> [3. AI Personalizer] --> State DB (Pending Review)
     """
+    lead = db.get_lead(lead_id)
+    if not lead:
+        return
+        
+    # Phase 1: Data Extraction & Enrichment
     try:
-        lead = db.get_lead(lead_id)
-        if not lead:
-            logger.warning(f"Lead {lead_id} not found")
-            return
-            
-        # Phase 1: Data Extraction & Enrichment
-        try:
-            logger.info(f"Starting enrichment for lead {lead_id}: {lead.get('domain')}")
-            # Update state database
-            db.update_lead_status(lead_id, "Enriched")
-            
-            # Programmatic scraper
-            metadata = extract_domain_metadata(lead["domain"])
-            
-            # Save enriched data & fallback email
-            db.update_lead_enrichment(
-                lead_id=lead_id,
-                extracted_metadata=metadata,
-                recipient_email=metadata.get("primary_email"),
-                status="Enriched"
-            )
-        except Exception as e:
-            error_msg = f"Enrichment Error: {str(e)}"
-            logger.error(error_msg)
-            db.update_lead_status(lead_id, "Failed", error_message=error_msg)
-            return
-
-        # Refetch lead after enrichment
-        lead = db.get_lead(lead_id)
-        try:
-            # Load extracted metadata
-            metadata = json.loads(lead["extracted_metadata"]) if lead["extracted_metadata"] else {}
-        except Exception as e:
-            error_msg = "Enrichment Error: Failed to parse metadata JSON."
-            logger.error(f"{error_msg} {str(e)}")
-            db.update_lead_status(lead_id, "Failed", error_message=error_msg)
-            return
-
-        # Phase 2: AI Personalization
-        try:
-            # Check for key configuration
-            api_key = db.get_setting("GEMINI_API_KEY")
-            if not api_key:
-                error_msg = "AI Error: GEMINI_API_KEY is not configured in settings."
-                logger.error(error_msg)
-                db.update_lead_status(lead_id, "Failed", error_message=error_msg)
-                return
-
-            db.update_lead_status(lead_id, "Pending_Review")
-            logger.info(f"Generating AI personalization for lead {lead_id}")
-            
-            # Connect to free Gemini API model (1.5 Flash or 2.5 Flash)
-            ai_data = generate_personalized_content(lead["company_name"], lead["domain"], metadata)
-            
-            # Save AI copy and transition state to Pending Review
-            db.update_lead_ai_output(
-                lead_id=lead_id,
-                pain_points=ai_data["pain_points"],
-                subject=ai_data["personalized_subject"],
-                body=ai_data["personalized_body"],
-                status="Pending_Review"
-            )
-            logger.info(f"Successfully completed pipeline for lead {lead_id}")
-        except Exception as e:
-            error_msg = f"AI Personalization Error: {str(e)}"
-            logger.error(error_msg)
-            db.update_lead_status(lead_id, "Failed", error_message=error_msg)
+        # Update state database
+        db.update_lead_status(lead_id, "Enriched")
+        
+        # Programmatic scraper
+        metadata = extract_domain_metadata(lead["domain"])
+        
+        # Save enriched data & fallback email
+        db.update_lead_enrichment(
+            lead_id=lead_id,
+            extracted_metadata=metadata,
+            recipient_email=metadata.get("primary_email"),
+            status="Enriched"
+        )
     except Exception as e:
-        logger.error(f"Unexpected error in pipeline for lead {lead_id}: {str(e)}")
+        db.update_lead_status(lead_id, "Failed", error_message=f"Enrichment Error: {str(e)}")
+        return
+
+    # Refetch lead after enrichment
+    lead = db.get_lead(lead_id)
+    try:
+        # Load extracted metadata
+        metadata = json.loads(lead["extracted_metadata"])
+    except Exception:
+        db.update_lead_status(lead_id, "Failed", error_message="Enrichment Error: Failed to parse metadata JSON.")
+        return
+
+    # Phase 2: AI Personalization
+    try:
+        # Check for key configuration
+        api_key = db.get_setting("GEMINI_API_KEY")
+        if not api_key:
+            db.update_lead_status(lead_id, "Failed", error_message="AI Error: GEMINI_API_KEY is not configured in settings.")
+            return
+
+        db.update_lead_status(lead_id, "Pending_Review")
+        
+        # Connect to free Gemini API model (1.5 Flash or 2.5 Flash)
+        ai_data = generate_personalized_content(lead["company_name"], lead["domain"], metadata)
+        
+        # Save AI copy and transition state to Pending Review
+        db.update_lead_ai_output(
+            lead_id=lead_id,
+            pain_points=ai_data["pain_points"],
+            subject=ai_data["personalized_subject"],
+            body=ai_data["personalized_body"],
+            status="Pending_Review"
+        )
+    except Exception as e:
+        db.update_lead_status(lead_id, "Failed", error_message=f"AI Personalization Error: {str(e)}")
 
 # --- Endpoints ---
 
@@ -178,41 +131,31 @@ def ingest_lead(request: IngestRequest, background_tasks: BackgroundTasks):
     Endpoint to ingest a new lead.
     Starts background pipeline tasks automatically.
     """
-    try:
-        domain = request.domain.strip().lower()
-        
-        # Check for duplicate
-        conn = db.get_db_connection()
-        row = conn.execute("SELECT id FROM leads WHERE domain = ?", (domain,)).fetchone()
-        conn.close()
-        
-        if row:
-            raise HTTPException(status_code=400, detail=f"Lead with domain '{domain}' already exists in pipeline.")
+    domain = request.domain.strip().lower()
+    
+    # Check for duplicate
+    conn = db.get_db_connection()
+    row = conn.execute("SELECT id FROM leads WHERE domain = ?", (domain,)).fetchone()
+    conn.close()
+    
+    if row:
+        raise HTTPException(status_code=400, detail=f"Lead with domain '{domain}' already exists in pipeline.")
 
-        success = db.add_lead(request.company_name, domain)
-        if not success:
-            raise HTTPException(status_code=500, detail="Failed to write lead to database.")
+    success = db.add_lead(request.company_name, domain)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to write lead to database.")
 
-        # Retrieve inserted row
-        conn = db.get_db_connection()
-        new_row = conn.execute("SELECT * FROM leads WHERE domain = ?", (domain,)).fetchone()
-        conn.close()
-        
-        if not new_row:
-            raise HTTPException(status_code=500, detail="Failed to retrieve inserted lead.")
-        
-        lead_id = new_row["id"]
-        logger.info(f"New lead ingested: {request.company_name} ({domain}) with ID {lead_id}")
-        
-        # Queue background processing tasks immediately
-        background_tasks.add_task(run_pipeline_for_lead, lead_id)
-        
-        return dict(new_row)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error ingesting lead: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+    # Retrieve inserted row
+    conn = db.get_db_connection()
+    new_row = conn.execute("SELECT * FROM leads WHERE domain = ?", (domain,)).fetchone()
+    conn.close()
+    
+    lead_id = new_row["id"]
+    
+    # Queue background processing tasks immediately
+    background_tasks.add_task(run_pipeline_for_lead, lead_id)
+    
+    return dict(new_row)
 
 @app.post("/api/leads/{lead_id}/update")
 def update_lead_draft(lead_id: int, request: UpdateRequest):
@@ -267,36 +210,26 @@ def approve_and_send(lead_id: int):
     Human Gate Approval Endpoint.
     Dispatches the email via SMTP and updates status to Completed.
     """
-    try:
-        lead = db.get_lead(lead_id)
-        if not lead:
-            raise HTTPException(status_code=404, detail="Lead not found")
-            
-        if not lead["recipient_email"] or not lead["personalized_subject"] or not lead["personalized_body"]:
-            raise HTTPException(status_code=400, detail="Email copy or recipient is incomplete.")
+    lead = db.get_lead(lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+        
+    if not lead["recipient_email"] or not lead["personalized_subject"] or not lead["personalized_body"]:
+        raise HTTPException(status_code=400, detail="Email copy or recipient is incomplete.")
 
-        try:
-            # Wrap SMTP send and status update in a transaction-safe flow
-            # In SQL database, we can update status to Completed upon success
-            logger.info(f"Sending email to {lead['recipient_email']} for lead {lead_id}")
-            send_email(
-                to_email=lead["recipient_email"],
-                subject=lead["personalized_subject"],
-                body=lead["personalized_body"]
-            )
-            db.update_lead_status(lead_id, "Completed")
-            logger.info(f"Email sent and lead {lead_id} marked as completed")
-            return {"message": "Email dispatched and lead marked completed"}
-        except Exception as e:
-            error_msg = f"Dispatch Error: {str(e)}"
-            logger.error(error_msg)
-            db.update_lead_status(lead_id, "Failed", error_message=error_msg)
-            raise HTTPException(status_code=500, detail=f"Email Dispatch failed: {str(e)}")
-    except HTTPException:
-        raise
+    try:
+        # Wrap SMTP send and status update in a transaction-safe flow
+        # In SQL database, we can update status to Completed upon success
+        send_email(
+            to_email=lead["recipient_email"],
+            subject=lead["personalized_subject"],
+            body=lead["personalized_body"]
+        )
+        db.update_lead_status(lead_id, "Completed")
+        return {"message": "Email dispatched and lead marked completed"}
     except Exception as e:
-        logger.error(f"Unexpected error in approve_and_send for lead {lead_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+        db.update_lead_status(lead_id, "Failed", error_message=f"Dispatch Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Email Dispatch failed: {str(e)}")
 
 # --- System Settings Endpoints ---
 
@@ -321,12 +254,6 @@ def update_system_settings(payload: Dict[str, str] = Body(...)):
     return {"message": "Settings saved successfully"}
 
 if __name__ == "__main__":
-    try:
-        import uvicorn
-        # Start on standard port 8000
-        # Disable auto-reload when running the file directly, because reload requires an importable module path.
-        logger.info("Starting Zero-Cost Revenue Engine on http://127.0.0.1:8000")
-        uvicorn.run(app, host="127.0.0.1", port=8000, reload=False)
-    except Exception as e:
-        logger.error(f"Failed to start server: {str(e)}")
-        raise
+    import uvicorn
+    # Start on standard port 8000
+    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
