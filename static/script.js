@@ -124,7 +124,9 @@ document.addEventListener("DOMContentLoaded", () => {
             <span>${message}</span>
         `;
         toastContainer.appendChild(toast);
-        lucide.createIcons();
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
 
         // Remove after 4s
         setTimeout(() => {
@@ -188,7 +190,9 @@ document.addEventListener("DOMContentLoaded", () => {
                     <p>No matching leads found.</p>
                 </div>
             `;
+            if (typeof lucide !== 'undefined') {
             lucide.createIcons();
+        }
             return;
         }
 
@@ -356,7 +360,9 @@ document.addEventListener("DOMContentLoaded", () => {
         
         btnReAi.disabled = true;
         btnReAi.innerHTML = `<i data-lucide="refresh-cw" class="animate-spin"></i> Processing...`;
-        lucide.createIcons();
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
         showToast("Generating fresh AI email copy...", "info");
         
         try {
@@ -373,7 +379,9 @@ document.addEventListener("DOMContentLoaded", () => {
         } finally {
             btnReAi.disabled = false;
             btnReAi.innerHTML = `<i data-lucide="refresh-cw"></i> Regenerate AI`;
+            if (typeof lucide !== 'undefined') {
             lucide.createIcons();
+        }
         }
     });
 
@@ -416,7 +424,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
         btnApprove.disabled = true;
         btnApprove.innerHTML = `<i data-lucide="loader" class="animate-spin"></i> Dispatched...`;
-        lucide.createIcons();
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
         showToast("Connecting to SMTP server & dispatching email...", "info");
         
         try {
@@ -436,7 +446,9 @@ document.addEventListener("DOMContentLoaded", () => {
         } finally {
             btnApprove.disabled = false;
             btnApprove.innerHTML = `<i data-lucide="send"></i> Approve & Send Email`;
+            if (typeof lucide !== 'undefined') {
             lucide.createIcons();
+        }
         }
     });
 
@@ -450,7 +462,9 @@ document.addEventListener("DOMContentLoaded", () => {
         
         btnIngest.disabled = true;
         btnIngest.innerHTML = `<i data-lucide="loader" class="animate-spin"></i> Enriched...`;
-        lucide.createIcons();
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
         showToast(`Ingesting and enriching ${companyName}...`, "info");
         
         try {
@@ -479,7 +493,9 @@ document.addEventListener("DOMContentLoaded", () => {
         } finally {
             btnIngest.disabled = false;
             btnIngest.innerHTML = `<i data-lucide="play" class="btn-icon"></i><span>Process</span>`;
+            if (typeof lucide !== 'undefined') {
             lucide.createIcons();
+        }
         }
     });
 
@@ -566,5 +582,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Initial setup
     loadLeads();
-    lucide.createIcons();
+    if (typeof lucide !== 'undefined') {
+        lucide.createIcons();
+    }
 });
