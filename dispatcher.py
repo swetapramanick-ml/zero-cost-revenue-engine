@@ -1,5 +1,6 @@
 import socket
 import smtplib
+import httpx
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from db import get_setting
@@ -13,19 +14,62 @@ socket.getaddrinfo = _ipv4_getaddrinfo
 
 def send_email(to_email: str, subject: str, body: str) -> bool:
     """
-    Sends an email using standard SMTP.
-    Retrieves SMTP settings dynamically from DB/environment.
+    Sends an email using standard SMTP or HTTP API fallback.
+    Retrieves settings dynamically from DB/environment.
     """
-    host = get_setting("SMTP_HOST")
-    port_str = get_setting("SMTP_PORT")
-    user = get_setting("SMTP_USER")
-    password = get_setting("SMTP_PASSWORD")
-    from_email = get_setting("SMTP_FROM_EMAIL")
+    host = get_setting("SMTP_HOST", "")
+    port_str = get_setting("SMTP_PORT", "587")
+    user = get_setting("SMTP_USER", "")
+    password = get_setting("SMTP_PASSWORD", "")
+    from_email = get_setting("SMTP_FROM_EMAIL", "")
     from_name = get_setting("SMTP_FROM_NAME", "Zero-Cost Revenue Engine")
 
-    if not all([host, port_str, user, password, from_email]):
-        raise ValueError("SMTP configuration is incomplete. Please set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, and SMTP_FROM_EMAIL.")
+    if not all([host, password, from_email]):
+        raise ValueError("Email configuration is incomplete. Please set Host, Password/API Key, and From Email.")
 
+    # 1. HTTP API Fallbacks (Bypasses Render SMTP port blocking)
+    host_lower = host.lower()
+    
+    if "api.sendgrid.com" in host_lower:
+        headers = {"Authorization": f"Bearer {password}", "Content-Type": "application/json"}
+        payload = {
+            "personalizations": [{"to": [{"email": to_email}]}],
+            "from": {"email": from_email, "name": from_name},
+            "subject": subject,
+            "content": [{"type": "text/plain", "value": body}]
+        }
+        r = httpx.post("https://api.sendgrid.com/v3/mail/send", json=payload, headers=headers, timeout=15)
+        if not r.is_success:
+            raise Exception(f"SendGrid API Error: {r.text}")
+        return True
+
+    elif "api.brevo.com" in host_lower or "api.sendinblue.com" in host_lower:
+        headers = {"api-key": password, "Content-Type": "application/json", "accept": "application/json"}
+        payload = {
+            "sender": {"name": from_name, "email": from_email},
+            "to": [{"email": to_email}],
+            "subject": subject,
+            "textContent": body
+        }
+        r = httpx.post("https://api.brevo.com/v3/smtp/email", json=payload, headers=headers, timeout=15)
+        if not r.is_success:
+            raise Exception(f"Brevo API Error: {r.text}")
+        return True
+
+    elif "api.resend.com" in host_lower:
+        headers = {"Authorization": f"Bearer {password}", "Content-Type": "application/json"}
+        payload = {
+            "from": f"{from_name} <{from_email}>",
+            "to": [to_email],
+            "subject": subject,
+            "text": body
+        }
+        r = httpx.post("https://api.resend.com/emails", json=payload, headers=headers, timeout=15)
+        if not r.is_success:
+            raise Exception(f"Resend API Error: {r.text}")
+        return True
+
+    # 2. Standard SMTP Fallback
     try:
         port = int(port_str)
     except ValueError:
