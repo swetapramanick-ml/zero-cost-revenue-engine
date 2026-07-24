@@ -4,6 +4,13 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from db import get_setting
 
+# Monkey-patch socket.getaddrinfo to always use IPv4 (AF_INET)
+# This fixes the "[Errno -9] Address family for hostname not supported" error on platforms like Render that have IPv6 issues.
+_orig_getaddrinfo = socket.getaddrinfo
+def _ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+socket.getaddrinfo = _ipv4_getaddrinfo
+
 def send_email(to_email: str, subject: str, body: str) -> bool:
     """
     Sends an email using standard SMTP.
