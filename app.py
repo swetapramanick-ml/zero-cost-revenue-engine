@@ -255,5 +255,6 @@ def update_system_settings(payload: Dict[str, str] = Body(...)):
 
 if __name__ == "__main__":
     import uvicorn
-    # Start on standard port 8000
-    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
+    # Start on standard port 8000 or the PORT provided by Render
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("app:app", host="0.0.0.0", port=port)
